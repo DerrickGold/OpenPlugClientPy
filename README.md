@@ -4,7 +4,7 @@ Python Client for [OpenPlugServer](https://github.com/DerrickGold/OpenPlugServer
 
 ###Dependencies
 - Python3
-- FFMpeg
+- FFMpeg --with faac support
 - Mplayer
 - ncurses
 - operating system with mkfifo support
