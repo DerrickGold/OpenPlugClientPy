@@ -21,7 +21,8 @@ at roughly the same time.
 ###Installation
 - git clone this repository
 - create 'cache' folder in same directory
-- configure 'GLOBAL_SETTINGS' at top of OpenPlugClient.py
+- configure 'GLOBAL_SETTINGS' at top of OpenPlugClient.py, change the server and playlist info
+- run 'python3 OpenPlugClient.py'
 
 ###To be added:
 As the OpenPlugServer advances feature wise, so will the client.

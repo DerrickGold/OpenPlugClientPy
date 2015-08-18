@@ -11,6 +11,7 @@ import curses
 GLOBAL_SETTINGS = {
     'server-url': 'http://192.168.1.10',
     'server-port': 25222,
+    'default-playlist': "_sup_secrets_test_playlist_of_doom",
     'cache-dir': './cache/',
     'fifo-file': './cache/mplayer.fifo',
     'debug-out': False
@@ -687,7 +688,7 @@ def gui(Player, api):
 
 def main():
 
-    api = API("_sup_secrets_test_playlist_of_doom")
+    api = API(GLOBAL_SETTINGS['default-playlist'])
 
     Player = AudioManager()
     playThread = threading.Thread(target=playlistThread, args=(api, Player))
