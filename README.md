@@ -28,5 +28,5 @@ As the OpenPlugServer advances feature wise, so will the client.
 
 
 ###Appologies
-The source is a bit of a mess as it waswas hacked together in about a day. The thread handling of global
-data is abysmal. Do not use this source for learning reference You will get burned.
+The source is a bit of a mess as it was hacked together in about a day. The thread handling of global
+data is abysmal. Do not use this source for learning reference. You will get burned.
