@@ -11,6 +11,9 @@ Python Client for [OpenPlugServer](https://github.com/DerrickGold/OpenPlugServer
 - youtube-dl
 
 
+![OpenPlugClientPy](https://raw.githubusercontent.com/DerrickGold/OpenPlugClientPy/master/screenshot.png)
+
+
 ###Description
 
 OpenPlugClientPy allows one to create their own music playlist of youtube videos on an OpenPlugServer.
