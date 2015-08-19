@@ -224,14 +224,15 @@ class AudioManager:
 
     def clearDecodeBacklog(self):
         #keep track of processes that are still running
-        self.decodeBacklog = [a for a in self.decodeBacklog if a.isDecoding()]
+        if len(self.decodeBacklog) > 0:
+            self.decodeBacklog = [a for a in self.decodeBacklog if a.isDecoding()]
 
 
     def songEnd(self):
         self.clearDecodeBacklog()
         #if we are switching songs but the current one is still decoding,
         #add it to the backlog so it can finish while the next song prepares
-        if self.isDecoding(): self.decodeBacklog.push(self.decodeProcess)
+        if self.isDecoding(): self.decodeBacklog.append(self.decodeProcess)
         #then detach the current decoder
         self.decodeProcess = None
 
