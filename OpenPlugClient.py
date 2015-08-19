@@ -37,41 +37,6 @@ class EventMessages:
         return len(self.log)
 
 
-class MediaControls:
-    CTRLFILE = GLOBAL_SETTINGS['fifo-file']
-    MAXBUFS = 2
-
-    def __init__(self):
-        self.curBuf = 0
-
-        for i in range(0, self.MAXBUFS):
-            if not os.path.exists(self.getFifo()):
-                os.mkfifo(self.getFifo())
-
-            self.swap()
-
-    def getFifo(self):
-        return self.CTRLFILE+"."+str(self.curBuf)
-
-    def swap(self):
-        self.curBuf+=1
-        if self.curBuf >= self.MAXBUFS:
-            self.curBuf = 0
-
-
-    def sendCmd(self, command, file=None):
-        if file is None: file = self.getFifo()
-
-        with open(file, 'w') as fp:
-            fp.write(str(command) + '\n')
-
-#make controls globally accessible
-MEDIAPLAYER = MediaControls()
-
-
-
-
-
 class DecodeProcess:
     def __init__(self, inputFile, outputFile):
         self.process = None
@@ -195,58 +160,17 @@ class MPlayer:
 
 
 
-
-
-
-
-
-class PlaybackProcess:
-    def __init__(self, fileStream, startTime):
-        self.fileStream = fileStream
-        self.startTime = startTime
-
-        self.fifofile = MEDIAPLAYER.getFifo()
-        self.process = subprocess.Popen(self.defaultParams(), stdin=self.fileStream)
-        MEDIAPLAYER.swap()
-
-
-
-        #MEDIAPLAYER.swap()
-
-    def defaultParams(self):
-        defaults = ['mplayer', '-input', 'file='+self.fifofile, '-demuxer', 'lavf',
-                                         '-idx', '-ss', str(self.startTime),'-']
-
-        if not GLOBAL_SETTINGS['debug-out']:
-            defaults.extend(['-really-quiet'])
-
-        return defaults
-
-    def isPlaying(self):
-        return self.process.poll() == None
-
-    def stop(self):
-        self.process.kill()
-
-    def mute(self):
-        MEDIAPLAYER.sendCmd('mute', self.fifofile)
-
-
-
-
-
-
 class AudioManager:
     DECODE_TO = GLOBAL_SETTINGS['cache-dir']
 
 
     def __init__(self):
         self.keepAlive = True
-        self.playbackProcess = None
         self.decodeProcess = None
         self.curSong = None
         self.messages = EventMessages('General')
         self.mplayer = None
+        self.decodeBacklog = []
 
 
     def ytToAPISong(self, song):
@@ -258,7 +182,6 @@ class AudioManager:
 
     def isSongCached(self, song):
         return os.path.isfile(self.songCacheName(song))
-
 
 
     def songCacheName(self, song):
@@ -275,45 +198,56 @@ class AudioManager:
 
     def play(self, ytsong):
 
+        if self.mplayer: self.mplayer.stop()
+
         if self.decodeProcess is not None and self.decodeProcess.isDecoding():
             self.messages.writeOut("Waiting for stream to seek: " + str(ytsong.getStartOffset()))
-            #if audio is decoding while we want to play it, then pull it from stdout
-            #self.playbackProcess = PlaybackProcess(self.decodeProcess.stdout(), ytsong.getStartOffset())
-            if self.mplayer: self.mplayer.stop()
             self.mplayer = MPlayer(self.decodeProcess.stdout(), ytsong.getStartOffset())
         else:
-            #otherwise, we have the file cached already, so lets go!
             self.messages.writeOut("Playing song from cache.")
-            #self.playbackProcess = PlaybackProcess(open(self.songCacheName(ytsong)), ytsong.getStartOffset())
-            if self.mplayer: self.mplayer.stop()
             self.mplayer = MPlayer()
             self.mplayer.play(self.songCacheName(ytsong), ytsong.getStartOffset())
 
         self.curSong = ytsong
-        return self.playbackProcess
 
+    def getMplayer(self):
+        return self.mplayer
 
     def isPlaying(self):
         return True
-        if self.playbackProcess == None: return False
-        return self.playbackProcess.isPlaying()
+
 
     def isDecoding(self):
         if self.decodeProcess == None: return False
         return self.decodeProcess.isDecoding()
 
 
-    def stop(self):
-        if self.isDecoding(): self.decodeProcess.stop()
+    def clearDecodeBacklog(self):
+        #keep track of processes that are still running
+        self.decodeBacklog = [a for a in self.decodeBacklog if a.isDecoding()]
+
+
+    def songEnd(self):
+        self.clearDecodeBacklog()
+        #if we are switching songs but the current one is still decoding,
+        #add it to the backlog so it can finish while the next song prepares
+        if self.isDecoding(): self.decodeBacklog.push(self.decodeProcess)
+        #then detach the current decoder
         self.decodeProcess = None
 
+
+    def stopDecoding(self):
+        if self.isDecoding(): self.decodeProcess.stop()
+        self.clearDecodeBacklog()
+        for p in self.decodeBacklog: p.stop()
+
+
+    def stop(self):
+        self.stopDecoding()
         if self.mplayer: self.mplayer.stop()
-        #if self.isPlaying(): self.playbackProcess.stop()
-        #self.playbackProcess = None
 
     def mute(self):
         if self.mplayer: self.mplayer.mute()
-        #if self.isPlaying(): self.playbackProcess.mute()
 
     def getSong(self):
         return self.curSong
@@ -367,8 +301,6 @@ class API:
             return songData['current_song']
 
         return None
-
-
 
 
     def updateCurrentSong(self):
@@ -568,8 +500,9 @@ def playlistThread(api, Player):
 
         if api.pingCurrentSong() != lastSong:
             Player.messages.writeOut("Getting next track...")
-            if Player.isPlaying():
-                Player.mute()
+            Player.mute()
+            Player.songEnd()
+            #Player.songEnd()
             #if the last song is still decoding, mute the audio and let it finish
             #then get the next song started
             (playListStatus, currentSong) = api.updateCurrentSong()
@@ -714,7 +647,11 @@ def gui(Player, api):
                     Player.messages.writeOut("An error occured:")
                     Player.messages.writeOut(msg)
 
+            elif command == "mute":
+                Player.mute()
 
+            elif command == "pos":
+                Player.messages.writeOut(str(Player.getPos()))
 
 
 
