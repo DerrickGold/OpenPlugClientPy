@@ -141,6 +141,64 @@ class DecodeProcess:
         return self.process.kill()
 
 
+class MPlayer:
+
+    def __init__(self, filestream=None, offset=None):
+
+        if not os.path.exists("temp.fifo"):
+            os.mkfifo("temp.fifo")
+
+
+        parameters = ['mplayer', '-quiet', '-input', 'file=temp.fifo', '-idle', '-demuxer', 'lavf', '-idx']
+
+        if filestream:
+            if offset:
+                parameters.append("-ss")
+                parameters.append(str(offset))
+
+            parameters.append("-")
+
+
+            self.process = subprocess.Popen(parameters, stdout=subprocess.PIPE, stdin=filestream)
+        else:
+            self.process = subprocess.Popen(parameters, stdout=subprocess.PIPE)
+
+
+    def sendCmd(self, cmd):
+        with open('temp.fifo', 'w') as fp:
+            fp.write("\n" + str(cmd) + "\n")
+
+
+    def getOutput(self):
+        for line in self.process.stdout:
+            if "ANS_" in line:
+                return line
+
+
+    def seekTo(self, offset):
+        self.sendCmd("seek " + str(offset) + " 2")
+
+    def play(self, filename, offset):
+        self.sendCmd('loadfile "' + filename + '"')
+        self.seekTo(offset)
+
+    def stop(self):
+        self.sendCmd("quit")
+        self.process.kill()
+
+    def mute(self):
+        self.sendCmd("mute")
+
+    def getPos(self):
+        self.sendCmd("get_time_pos")
+        return self.getOutput()
+
+
+
+
+
+
+
 
 class PlaybackProcess:
     def __init__(self, fileStream, startTime):
@@ -188,6 +246,7 @@ class AudioManager:
         self.decodeProcess = None
         self.curSong = None
         self.messages = EventMessages('General')
+        self.mplayer = None
 
 
     def ytToAPISong(self, song):
@@ -219,17 +278,23 @@ class AudioManager:
         if self.decodeProcess is not None and self.decodeProcess.isDecoding():
             self.messages.writeOut("Waiting for stream to seek: " + str(ytsong.getStartOffset()))
             #if audio is decoding while we want to play it, then pull it from stdout
-            self.playbackProcess = PlaybackProcess(self.decodeProcess.stdout(), ytsong.getStartOffset())
+            #self.playbackProcess = PlaybackProcess(self.decodeProcess.stdout(), ytsong.getStartOffset())
+            if self.mplayer: self.mplayer.stop()
+            self.mplayer = MPlayer(self.decodeProcess.stdout(), ytsong.getStartOffset())
         else:
             #otherwise, we have the file cached already, so lets go!
             self.messages.writeOut("Playing song from cache.")
-            self.playbackProcess = PlaybackProcess(open(self.songCacheName(ytsong)), ytsong.getStartOffset())
+            #self.playbackProcess = PlaybackProcess(open(self.songCacheName(ytsong)), ytsong.getStartOffset())
+            if self.mplayer: self.mplayer.stop()
+            self.mplayer = MPlayer()
+            self.mplayer.play(self.songCacheName(ytsong), ytsong.getStartOffset())
 
         self.curSong = ytsong
         return self.playbackProcess
 
 
     def isPlaying(self):
+        return True
         if self.playbackProcess == None: return False
         return self.playbackProcess.isPlaying()
 
@@ -242,15 +307,19 @@ class AudioManager:
         if self.isDecoding(): self.decodeProcess.stop()
         self.decodeProcess = None
 
-        if self.isPlaying(): self.playbackProcess.stop()
-        self.playbackProcess = None
+        if self.mplayer: self.mplayer.stop()
+        #if self.isPlaying(): self.playbackProcess.stop()
+        #self.playbackProcess = None
 
     def mute(self):
-        if self.isPlaying(): self.playbackProcess.mute()
+        if self.mplayer: self.mplayer.mute()
+        #if self.isPlaying(): self.playbackProcess.mute()
 
     def getSong(self):
         return self.curSong
 
+    def getPos(self):
+        if self.mplayer: self.mplayer.getPos()
 
 
 class APISong:
