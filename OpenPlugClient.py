@@ -6,6 +6,7 @@ import threading
 import time
 import os
 import curses
+import copy
 
 
 GLOBAL_SETTINGS = {
@@ -130,14 +131,28 @@ class MPlayer:
 
 
     def sendCmd(self, cmd):
+        if self.process.poll() is not None: return
+
         with open('temp.fifo', 'w') as fp:
             fp.write("\n" + str(cmd) + "\n")
 
 
     def getOutput(self):
+        if self.process.stdout is None: return None
+        if self.process.poll() is not None: return None
+
+        timeout = 0
         for line in self.process.stdout:
+            line = line.decode()
             if "ANS_" in line:
+                if "=" in line:
+                    line = line.split("=")
+                    line = line[1].strip()
                 return line
+
+            timeout+=1
+
+            if timeout > 20: return None
 
 
     def seekTo(self, offset):
@@ -156,6 +171,10 @@ class MPlayer:
 
     def getPos(self):
         self.sendCmd("get_time_pos")
+        return self.getOutput()
+
+    def getPercent(self):
+        self.sendCmd("get_percent_pos")
         return self.getOutput()
 
 
@@ -254,7 +273,12 @@ class AudioManager:
         return self.curSong
 
     def getPos(self):
-        if self.mplayer: self.mplayer.getPos()
+        if self.mplayer: return self.mplayer.getPos()
+        return None
+
+    def getPercent(self):
+        if self.mplayer: return self.mplayer.getPercent()
+        return None
 
 
 class APISong:
@@ -368,6 +392,7 @@ class YoutubeSong:
 
     def __init__(self, song, ytStatus=None):
         self.song = song
+        self.length = song.length
         self.addYTData(ytStatus)
 
         #don't manually override any size already in the database
@@ -520,6 +545,7 @@ class GUI:
 
     def __init__(self):
         self.stdscr = curses.initscr()
+        self.stdscr.leaveok(0)
         curses.start_color()
 
         (height, width) = self.stdscr.getmaxyx()
@@ -534,6 +560,8 @@ class GUI:
         self.initInputBox()
         self.initHelp()
         self.initFooter()
+        self.initProgressBar()
+
 
 
 
@@ -562,8 +590,10 @@ class GUI:
         curses.init_pair(self.COLOR_PAIRS['messages'], curses.COLOR_GREEN, curses.COLOR_BLACK)
         self.messages.bkgd(" ", curses.color_pair(self.COLOR_PAIRS['messages']))
 
+
     def drawMessages(self, eventMessage):
-        #self.messages.clear()
+        self.messages.clear()
+        self.messages.leaveok(0)
         self.messages.addstr(0, 0, "Program Events:")
 
         start = 1
@@ -575,21 +605,32 @@ class GUI:
 
 
     def initTrackInfo(self):
-        self.trackInfo = curses.newwin(int(self.height/2)-1, int(self.width / 2), 1, 0)
+        self.trackInfo = curses.newwin(5, int(self.width / 2), 1, 0)
+
         #self.trackInfo.box()
 
     def drawTrackInfo(self, song):
         self.trackInfo.clear()
+        self.trackInfo.leaveok(0)
         self.trackInfo.box()
         self.trackInfo.addstr(0,0, "Song Details:")
 
         if song is not None:
-            song = song.song
-            self.trackInfo.addstr(2, 1, "Artist: " + song.artist)
-            self.trackInfo.addstr(3, 1, "Title: " + song.title)
+            self.trackInfo.addstr(2, 1, "Artist: " + song.song.artist)
+            self.trackInfo.addstr(3, 1, "Title: " + song.song.title)
 
         #self.trackInfo.addstr(1,1, str(song.song))
         self.trackInfo.refresh()
+
+
+    def initProgressBar(self):
+        self.progress = curses.newwin(1, int(self.width/2) - 2, 6, 1)
+
+    def drawProgress(self, position):
+        self.trackInfo.leaveok(0)
+        newPos = position * (int(self.width/2) - 3)
+        self.progress.addstr(0, 0, "#"*int(newPos))
+        self.progress.refresh()
 
 
     def initInputBox(self):
@@ -601,7 +642,9 @@ class GUI:
         self.inputBox.move(0, 1)
         self.inputBox.clrtoeol()
         self.inputBox.refresh()
-
+        (y, x) = self.inputBox.getyx()
+        curses.setsyx(y, x)
+        curses.doupdate()
     def getInput(self):
         return self.inputBox.getstr(0, 1).decode()
 
@@ -609,6 +652,7 @@ class GUI:
     def initHelp(self):
         self.help = curses.newwin(int(self.height/2)-2, int(self.width/2), int(self.height/2), 0)
         self.help.box()
+        self.help.leaveok(0)
 
     def drawHelp(self):
         self.help.addstr(0, 0, "Commands:")
@@ -653,6 +697,8 @@ def gui(Player, api):
 
             elif command == "pos":
                 Player.messages.writeOut(str(Player.getPos()))
+            elif command == "per":
+                Player.messages.writeOut(str(Player.getPercent()))
 
 
 
@@ -667,6 +713,10 @@ def gui(Player, api):
 
     inThread = threading.Thread(target=inputThread)
     inThread.start()
+
+    playThread = threading.Thread(target=playlistThread, args=(api, Player))
+    playThread.start()
+
     oldSong = None
     while True:
 
@@ -684,24 +734,28 @@ def gui(Player, api):
             oldMsgs = newCount
 
         curSong = Player.getSong()
-        if oldSong != curSong:
+        if oldSong is None or oldSong != curSong:
             doRedraw = True
             oldSong = curSong
 
 
         time.sleep(1)
 
+        if Player.getMplayer() is not None and oldSong is not None:
+            pos = Player.getPos()
+            #Player.messages.writeOut("Position: " + str(pos))
+            #Player.messages.writeOut(str(oldSong.length))
+            if pos is not None:
+                count = (int(float(pos)) + 1) / (int(oldSong.length) + 1)
+                g.drawProgress(count)
+
+
     curses.endwin()
 
 def main():
 
     api = API(GLOBAL_SETTINGS['default-playlist'])
-
-    Player = AudioManager()
-    playThread = threading.Thread(target=playlistThread, args=(api, Player))
-    playThread.start()
-
-    gui(Player, api)
+    gui(AudioManager(), api)
 
 main()
 
