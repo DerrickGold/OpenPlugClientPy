@@ -15,7 +15,8 @@ GLOBAL_SETTINGS = {
     'default-playlist': "_sup_secrets_test_playlist_of_doom",
     'cache-dir': './cache/',
     'fifo-file': './cache/mplayer.fifo',
-    'debug-out': False
+    'debug-out': False,
+    'error-log': './log.txt'
 }
 
 class EventMessages:
@@ -125,9 +126,11 @@ class MPlayer:
             parameters.append("-")
 
 
-            self.process = subprocess.Popen(parameters, stdout=subprocess.PIPE, stdin=filestream)
+            self.process = subprocess.Popen(parameters, stdout=subprocess.PIPE, stdin=filestream,
+                                            stderr=open(GLOBAL_SETTINGS['error-log'], 'a'))
         else:
-            self.process = subprocess.Popen(parameters, stdout=subprocess.PIPE)
+            self.process = subprocess.Popen(parameters, stdout=subprocess.PIPE,
+                                            stderr=open(GLOBAL_SETTINGS['error-log'], 'a'))
 
 
     def sendCmd(self, cmd):
@@ -177,6 +180,10 @@ class MPlayer:
         self.sendCmd("get_percent_pos")
         return self.getOutput()
 
+    def isAlive(self):
+        if self.process is None: return False
+        return self.process.poll() is not None
+
 
 
 class AudioManager:
@@ -224,8 +231,11 @@ class AudioManager:
             self.mplayer = MPlayer(self.decodeProcess.stdout(), ytsong.getStartOffset())
         else:
             self.messages.writeOut("Playing song from cache.")
-            self.mplayer = MPlayer(open(self.songCacheName(ytsong), ytsong.getStartOffset()))
-            #self.mplayer.play(self.songCacheName(ytsong), ytsong.getStartOffset())
+            self.mplayer = MPlayer()
+            while self.mplayer.isAlive() == False:
+                continue
+
+            self.mplayer.play(self.songCacheName(ytsong), ytsong.getStartOffset())
 
         self.curSong = ytsong
 
@@ -659,13 +669,13 @@ class GUI:
         self.height = height
 
 
-        curses.init_pair(1, curses.COLOR_YELLOW, curses.COLOR_BLUE)
-        curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLUE)
-        curses.init_pair(3, curses.COLOR_WHITE, curses.COLOR_RED)
+        curses.init_pair(9, curses.COLOR_YELLOW, curses.COLOR_BLUE)
+        curses.init_pair(10, curses.COLOR_GREEN, curses.COLOR_BLUE)
+        curses.init_pair(11, curses.COLOR_WHITE, curses.COLOR_RED)
         self.COLOR_PAIRS = {
-            'banner': curses.color_pair(1)|curses.A_NORMAL,
-            'progress': curses.color_pair(2)|curses.A_DIM,
-            'serverProg': curses.color_pair(3)
+            'banner': curses.color_pair(9)|curses.A_NORMAL,
+            'progress': curses.color_pair(10)|curses.A_DIM,
+            'serverProg': curses.color_pair(11)
         }
 
 
@@ -758,6 +768,8 @@ def gui(stdscr, Player, api):
     playThread = threading.Thread(target=playlistThread, args=(api, Player))
     playThread.start()
 
+    Player.messages.writeOut("Can color? - " + str(curses.can_change_color()))
+
     oldSong = None
     while True:
         if not inThread.is_alive(): break
@@ -789,17 +801,17 @@ def gui(stdscr, Player, api):
 
 
 
-def main():
+def main(stdscr):
 
-    stdscr = curses.initscr()
     curses.start_color()
+    curses.use_default_colors()
     stdscr.clear()
     stdscr.refresh()
 
     api = API(GLOBAL_SETTINGS['default-playlist'])
     gui(stdscr, AudioManager(), api)
 
-    curses.endwin()
 
-main()
+curses.wrapper(main)
+
 
