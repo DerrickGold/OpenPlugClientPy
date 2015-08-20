@@ -117,8 +117,8 @@ class MPlayer:
 
         parameters = ['mplayer', '-quiet', '-input', 'file=temp.fifo', '-idle', '-demuxer', 'lavf', '-idx']
 
-        if filestream:
-            if offset:
+        if filestream is not None:
+            if offset is not None:
                 parameters.append("-ss")
                 parameters.append(str(offset))
 
@@ -224,8 +224,8 @@ class AudioManager:
             self.mplayer = MPlayer(self.decodeProcess.stdout(), ytsong.getStartOffset())
         else:
             self.messages.writeOut("Playing song from cache.")
-            self.mplayer = MPlayer()
-            self.mplayer.play(self.songCacheName(ytsong), ytsong.getStartOffset())
+            self.mplayer = MPlayer(open(self.songCacheName(ytsong), ytsong.getStartOffset()))
+            #self.mplayer.play(self.songCacheName(ytsong), ytsong.getStartOffset())
 
         self.curSong = ytsong
 
@@ -319,14 +319,20 @@ class API:
         self.playlist = playlistName
         self.currentSong = None
         self.currentSongID = None
+        self.serverPos = None
 
     def pingCurrentSong(self):
         (status, songData) = self.getPlaylist()
+
         if status == 200:
+            self.serverPos = int(songData['requested_time']) - int(songData['song_start_time'])
             return songData['current_song']
 
         return None
 
+    def getServerPos(self):
+        if self.serverPos is None: return 1
+        return self.serverPos
 
     def updateCurrentSong(self):
         (status, songData) = self.getPlaylist()
@@ -536,101 +542,149 @@ def playlistThread(api, Player):
         time.sleep(1)
 
 
+
+class GUIWindow(object):
+    def __init__(self, height=0,width=0,y=0,x=0):
+        self.window = curses.newwin(height, width, y, x)
+        self.color = None
+
+    def draw(self):
+        self.window.refresh()
+
+    def getSize(self):
+        return self.window.getmaxyx()
+
+    def setColor(self, color):
+        self.color = color
+        self.window.bkgd(' ', color)
+
+    def addstr(self, y, x, text):
+        if self.color is None:
+            self.window.addstr(y, x, text)
+        else:
+            self.window.addstr(y, x, text, self.color)
+
+
+
+class GUIBanner(GUIWindow):
+    def __init__(self, height, width, y, x, color):
+        super().__init__(height, width, y, x)
+        self.setColor(color)
+
+
+    def setBannerText(self, text):
+        self.bannerText = text
+
+
+    def draw(self):
+        self.window.erase()
+        self.window.addstr(0, 1, str(self.bannerText))
+        super().draw()
+
+
+class GUITrackInfo(GUIWindow):
+
+    def __init__(self, height, width, y, x):
+        super().__init__(height, width, y, x)
+
+    def draw(self, curTrack):
+        #self.window.clear()
+        self.window.box()
+        self.window.addstr(0,0, "Song Details:")
+
+        if curTrack is not None:
+            self.window.addstr(2, 1, "Artist: " + curTrack.song.artist)
+            self.window.addstr(3, 1, "Title: " + curTrack.song.title)
+            self.window.addstr(4, 1, "Pos:")
+            self.window.addstr(6, 1, "Server Pos:")
+
+        super().draw()
+
+class GUITrackProgressBar(GUIWindow):
+    def __init__(self, width, y, x):
+        super().__init__(1, width, y, x)
+
+    def draw(self, progress):
+        self.window.clrtoeol()
+        (h, w) = self.getSize()
+
+        newPos = progress * w
+        self.addstr(0, 0, "#"*int(newPos))
+        super().draw()
+
+
+class GUIHelp(GUIWindow):
+    def __init__(self, height, width, y, x):
+        super().__init__(height, width, y, x)
+
+    def draw(self):
+        self.window.erase()
+        self.window.box()
+        self.window.addstr(0, 0, "Commands:")
+        self.window.addstr(3, 2, "add {youtube url}\tAdd new song to connected playlist.")
+        self.window.addstr(4, 2, "exit\t\t\tExit program")
+        self.window.refresh()
+
+class GUIEvents(GUIWindow):
+    def __init__(self, height, width, y, x):
+        super().__init__(height, width, y, x)
+        self.msgCount = 0
+
+    def draw(self):
+        self.window.box()
+        self.window.addstr(0, 0, "Program Events:")
+        super().draw()
+
+    def addMessage(self, msg):
+        (h,w) = self.getSize()
+
+        if 1 + self.msgCount >= h:
+            self.msgCount = 0
+            self.window.clear()
+
+        self.window.addstr(1 + self.msgCount, 1, str(msg))
+        self.msgCount +=1
+        self.draw()
+
+
+
+
 class GUI:
-    COLOR_PAIRS = {
-        'banner': 1,
-        'messages': 2,
-        'footer': 3,
-    }
 
-    def __init__(self):
-        self.stdscr = curses.initscr()
-        self.stdscr.leaveok(0)
-        curses.start_color()
-
-        (height, width) = self.stdscr.getmaxyx()
+    def __init__(self, stdscr):
+        (height, width) = stdscr.getmaxyx()
+        starty = 0
+        startx = 0
         self.width = width
         self.height = height
-        self.win = curses.newwin(height, width, 0, 0)
-        self.win.box()
 
-        self.initBanner()
-        self.initMessages()
-        self.initTrackInfo()
+
+        curses.init_pair(1, curses.COLOR_YELLOW, curses.COLOR_BLUE)
+        curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLUE)
+        curses.init_pair(3, curses.COLOR_WHITE, curses.COLOR_RED)
+        self.COLOR_PAIRS = {
+            'banner': curses.color_pair(1)|curses.A_NORMAL,
+            'progress': curses.color_pair(2)|curses.A_DIM,
+            'serverProg': curses.color_pair(3)
+        }
+
+
+        self.trackInfo = GUITrackInfo(9, int(self.width/2), starty+1, 0)
+
+        self.progressBar = GUITrackProgressBar(int(self.width/2)-4, starty+6, 2)
+        self.progressBar.setColor(self.COLOR_PAIRS['progress'])
+
+        self.serverProgress = GUITrackProgressBar(int(self.width/2)-4, starty+8, 2)
+        self.serverProgress.setColor(self.COLOR_PAIRS['serverProg'])
+
+
+        self.footer = GUIBanner(1, self.width-1, starty + self.height-3, 0, self.COLOR_PAIRS['banner'])
+        self.banner = GUIBanner(1, self.width-1, starty, 0, self.COLOR_PAIRS['banner'])
+
+        self.help = GUIHelp(10, int(self.width/2), starty + self.height - 13, 0)
+        self.messages = GUIEvents(self.height - 4, int(self.width/2), starty + 1, int(self.width/2))
+
         self.initInputBox()
-        self.initHelp()
-        self.initFooter()
-        self.initProgressBar()
-
-
-
-
-    def initBanner(self):
-        self.banner = curses.newwin(1, self.width-1, 0, 0)
-        curses.init_pair(self.COLOR_PAIRS['banner'], curses.COLOR_YELLOW, curses.COLOR_BLUE)
-        self.banner.bkgd(" ", curses.color_pair(self.COLOR_PAIRS['banner']))
-
-    def drawBanner(self, text):
-        self.banner.addstr(0, 0, text)
-        self.banner.refresh()
-
-    def initFooter(self):
-        self.footer = curses.newwin(1, self.width-1, self.height - 3, 0)
-        curses.init_pair(self.COLOR_PAIRS['footer'], curses.COLOR_WHITE, curses.COLOR_GREEN)
-        self.footer.bkgd(" ", curses.color_pair(self.COLOR_PAIRS['footer']))
-
-    def drawFooter(self):
-        self.footer.addstr(0, 0, "Enter Command:")
-        self.footer.refresh()
-
-
-    def initMessages(self):
-        self.messages = curses.newwin(self.height - 4, int(self.width / 2), 1, int(self.width/2))
-        self.messages.box()
-        curses.init_pair(self.COLOR_PAIRS['messages'], curses.COLOR_GREEN, curses.COLOR_BLACK)
-        self.messages.bkgd(" ", curses.color_pair(self.COLOR_PAIRS['messages']))
-
-
-    def drawMessages(self, eventMessage):
-        self.messages.clear()
-        self.messages.leaveok(0)
-        self.messages.addstr(0, 0, "Program Events:")
-
-        start = 1
-        for msg in eventMessage.all():
-            self.messages.addstr(start, 1, msg)
-            start+=1
-
-        self.messages.refresh()
-
-
-    def initTrackInfo(self):
-        self.trackInfo = curses.newwin(5, int(self.width / 2), 1, 0)
-
-        #self.trackInfo.box()
-
-    def drawTrackInfo(self, song):
-        self.trackInfo.clear()
-        self.trackInfo.leaveok(0)
-        self.trackInfo.box()
-        self.trackInfo.addstr(0,0, "Song Details:")
-
-        if song is not None:
-            self.trackInfo.addstr(2, 1, "Artist: " + song.song.artist)
-            self.trackInfo.addstr(3, 1, "Title: " + song.song.title)
-
-        #self.trackInfo.addstr(1,1, str(song.song))
-        self.trackInfo.refresh()
-
-
-    def initProgressBar(self):
-        self.progress = curses.newwin(1, int(self.width/2) - 2, 6, 1)
-
-    def drawProgress(self, position):
-        self.trackInfo.leaveok(0)
-        newPos = position * (int(self.width/2) - 3)
-        self.progress.addstr(0, 0, "#"*int(newPos))
-        self.progress.refresh()
 
 
     def initInputBox(self):
@@ -642,35 +696,22 @@ class GUI:
         self.inputBox.move(0, 1)
         self.inputBox.clrtoeol()
         self.inputBox.refresh()
-        (y, x) = self.inputBox.getyx()
-        curses.setsyx(y, x)
-        curses.doupdate()
     def getInput(self):
         return self.inputBox.getstr(0, 1).decode()
 
 
-    def initHelp(self):
-        self.help = curses.newwin(int(self.height/2)-2, int(self.width/2), int(self.height/2), 0)
-        self.help.box()
-        self.help.leaveok(0)
-
-    def drawHelp(self):
-        self.help.addstr(0, 0, "Commands:")
-        self.help.addstr(3, 2, "add {youtube url}\tAdd new song to connected playlist.")
-        self.help.addstr(4, 2, "exit\t\t\tExit program")
-        self.help.refresh()
 
 
 
-def gui(Player, api):
+def gui(stdscr, Player, api):
 
-    g = GUI()
-    g.stdscr.clear()
+    g = GUI(stdscr)
+
 
     def inputThread():
         while True:
             curses.echo()
-            g.drawInputBox()
+            #g.drawInputBox()
             command = g.getInput()
             #command = command.replace('\n', '')
             if command == "exit":
@@ -702,14 +743,14 @@ def gui(Player, api):
 
 
 
-    doRedraw = True
+
     oldMsgs = 0
 
-    g.stdscr.refresh()
-    g.drawBanner("Server: " + str(api.playlistURL()))
-    g.drawHelp()
-    g.drawFooter()
-
+    g.help.draw()
+    g.footer.setBannerText("Enter Command:")
+    g.footer.draw()
+    g.banner.setBannerText("Server: " + api.playlistURL())
+    g.banner.draw()
 
     inThread = threading.Thread(target=inputThread)
     inThread.start()
@@ -719,24 +760,17 @@ def gui(Player, api):
 
     oldSong = None
     while True:
-
-        if doRedraw:
-            g.drawMessages(Player.messages)
-            g.drawTrackInfo(oldSong)
-            doRedraw = False
-
-
         if not inThread.is_alive(): break
 
         newCount = Player.messages.msgCount()
         if oldMsgs != newCount:
-            doRedraw = True
+            g.messages.addMessage(Player.messages.lastMessage())
             oldMsgs = newCount
 
         curSong = Player.getSong()
         if oldSong is None or oldSong != curSong:
-            doRedraw = True
             oldSong = curSong
+            g.trackInfo.draw(oldSong)
 
 
         time.sleep(1)
@@ -744,18 +778,28 @@ def gui(Player, api):
         if Player.getMplayer() is not None and oldSong is not None:
             pos = Player.getPos()
             #Player.messages.writeOut("Position: " + str(pos))
-            #Player.messages.writeOut(str(oldSong.length))
             if pos is not None:
                 count = (int(float(pos)) + 1) / (int(oldSong.length) + 1)
-                g.drawProgress(count)
+                g.progressBar.draw(count)
 
 
-    curses.endwin()
+            count = api.getServerPos()/ (int(oldSong.length + 1))
+            g.serverProgress.draw(count)
+
+
+
 
 def main():
 
+    stdscr = curses.initscr()
+    curses.start_color()
+    stdscr.clear()
+    stdscr.refresh()
+
     api = API(GLOBAL_SETTINGS['default-playlist'])
-    gui(AudioManager(), api)
+    gui(stdscr, AudioManager(), api)
+
+    curses.endwin()
 
 main()
 
